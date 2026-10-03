@@ -1,14 +1,10 @@
-// USB host MIDI example
-// using https://github.com/rppicomidi/usb_midi_host
+// Generic MIDI CV
+// Music Thing Modular Workshop Computer
 //
-// USB host means that the MTM Computer connects to (and may provide power to) USB devices
-// such as MIDI controllers/keyboards, the 8mu, etc.
-
-// To connect with USB to a laptop/desktop computer (which itself acts as a USB host),
-// see the usb_device example.
-
-
-// This is a very slightly modified 
+// V1:
+// USB MIDI host receives CC messages.
+// CC20-23 are captured as four controller values.
+// CV output will be added after MIDI reception is verified.
 
 #include "ComputerCard.h"
 
@@ -18,174 +14,158 @@
 #include "usb_midi_host.h"
 
 
-
-
-class MIDIHost : public ComputerCard
+class GenericMidiCV : public ComputerCard
 {
 public:
-	MIDIHost()
-	{
-		midi_dev_addr = 0;
-		device_connected = 0;
-		
-		counter = 0;
-	}
+    GenericMidiCV()
+    {
+        midi_dev_addr = 0;
+        device_connected = 0;
+        midi_activity = 0;
 
-	// Start the second core.
-	//
-	// Call this from main() after the card is constructed, and before Run().
-	// We don't launch core1 from the constructor: ComputerCard::ThisPtr() is
-	// only set once Run() is called, but core1 needs the instance as soon as
-	// it starts, so we stash a pointer to it here instead.
-	void StartUSBCore()
-	{
-		instance = this;
-		multicore_launch_core1(core1);
-	}
+        for (int i = 0; i < 4; i++)
+            cc_value[i] = 0;
+    }
 
-	// Boilerplate to call member function as second core
-	static void core1()
-	{
-		instance->USBCore();
-	}
+    void StartUSBCore()
+    {
+        instance = this;
+        multicore_launch_core1(core1);
+    }
 
-	// Send alternate note-on and note-off messages
-	void SendNextNote()
-	{
-		static uint8_t noteOn[3] = {0x90, 0x5f, 0x7f};
-		static uint8_t noteOff[3] = {0x80, 0x5f, 0x00};
-		static bool noteOnNext = true;
+    static void core1()
+    {
+        instance->USBCore();
+    }
 
-		// Transmit the note message on the highest cable number
-		uint8_t cable = tuh_midih_get_num_tx_cables(midi_dev_addr) - 1;
+    void USBCore()
+    {
+        board_init();
+        tusb_init();
 
+        while (1)
+        {
+            tuh_task();
+        }
+    }
 
-		// Toggle between sending note-on and note-off messages
-		if (noteOnNext)
-		{
-			tuh_midi_stream_write(midi_dev_addr, cable, noteOn, sizeof(noteOn));
-			noteOnNext = false;
-		}
-		else
-		{
-			tuh_midi_stream_write(midi_dev_addr, cable, noteOff, sizeof(noteOff));
-			noteOnNext = true;
-		}
-	}
+    // Called at the Computer's audio sample rate.
+    virtual void ProcessSample()
+    {
+        // Bottom-left LED: USB MIDI device connected.
+        LedOn(4, device_connected);
 
-	
-	// Code for second RP2040 core, blocking
-	// Handles MIDI in/out messages
-	// Untested on long SysEx messages
-	void USBCore()
-	{
-		// Initialise TinyUSB
-		board_init();
-		tusb_init();
-		
-		while (1)
-		{
-			tuh_task();
-		
-			bool connected = midi_dev_addr != 0 && tuh_midi_configured(midi_dev_addr);
+        // Bottom-right LED: flashes whenever one of our four CCs is received.
+        LedOn(5, midi_activity > 0);
 
-			// device must be attached and have at least one endpoint ready to receive a message
-			if (connected && tuh_midih_get_num_tx_cables(midi_dev_addr) >= 1)
-			{
+        if (midi_activity > 0)
+            midi_activity--;
+    }
 
-				if (counter >= 20000)
-				{
-					SendNextNote();
-					counter -= 20000;
-				}
+    static volatile uint8_t device_connected;
+    static volatile uint8_t midi_dev_addr;
 
-				// Send a USB packet immediately (even though in this case,
-				// we are not close to the 64-byte maximum payload)
- 				tuh_midi_stream_flush(midi_dev_addr);
-			}
-		}
+    // Current MIDI values for our four outputs.
+    static volatile uint8_t cc_value[4];
 
-	}
+    // Countdown used to flash the MIDI activity LED.
+    static volatile uint32_t midi_activity;
 
-	
-	// 48kHz audio processing function
-	virtual void ProcessSample()
-	{
-		// No audio I/O, so just flash an LED
-		// to indicate that the card is running
-		LedOn(5, counter < 10000);
-
-		// LED 4 indicates whether MIDI device is connected
-		LedOn(4, device_connected);
-		
-		// Counter is reset by other core
-		if (counter <= 30000)
-			counter++;
-	}
-	
-	static uint8_t device_connected;
-	static uint8_t midi_dev_addr;
-	
 private:
-	volatile uint32_t counter;
-	static MIDIHost *instance;
+    static GenericMidiCV *instance;
 };
 
 
-uint8_t MIDIHost::device_connected;
-uint8_t MIDIHost::midi_dev_addr;
-MIDIHost *MIDIHost::instance = nullptr;
+volatile uint8_t GenericMidiCV::device_connected = 0;
+volatile uint8_t GenericMidiCV::midi_dev_addr = 0;
+volatile uint8_t GenericMidiCV::cc_value[4] = {0, 0, 0, 0};
+volatile uint32_t GenericMidiCV::midi_activity = 0;
+
+GenericMidiCV *GenericMidiCV::instance = nullptr;
 
 
-// Four callback functions that rppicomidi/usb_midi_host uses
-
-void tuh_midi_mount_cb(uint8_t dev_addr, uint8_t in_ep, uint8_t out_ep, uint8_t num_cables_rx, uint16_t num_cables_tx)
+// Called when a USB MIDI device is connected.
+void tuh_midi_mount_cb(
+    uint8_t dev_addr,
+    uint8_t in_ep,
+    uint8_t out_ep,
+    uint8_t num_cables_rx,
+    uint16_t num_cables_tx)
 {
-	(void)in_ep; (void)out_ep; (void)num_cables_rx; (void)num_cables_tx; // avoid unused variable warnings
+    (void)in_ep;
+    (void)out_ep;
+    (void)num_cables_rx;
+    (void)num_cables_tx;
 
-	
-	if (MIDIHost::midi_dev_addr == 0)
-	{
-		MIDIHost::midi_dev_addr = dev_addr;
-		MIDIHost::device_connected = 1;
-	}
+    if (GenericMidiCV::midi_dev_addr == 0)
+    {
+        GenericMidiCV::midi_dev_addr = dev_addr;
+        GenericMidiCV::device_connected = 1;
+    }
 }
 
+
+// Called when a USB MIDI device is disconnected.
 void tuh_midi_umount_cb(uint8_t dev_addr, uint8_t instance)
 {
-	(void)instance;
-	
-	if (dev_addr == MIDIHost::midi_dev_addr)
-	{
-		MIDIHost::midi_dev_addr = 0;
-		MIDIHost::device_connected = 0;
-	}
+    (void)instance;
+
+    if (dev_addr == GenericMidiCV::midi_dev_addr)
+    {
+        GenericMidiCV::midi_dev_addr = 0;
+        GenericMidiCV::device_connected = 0;
+    }
 }
 
+
+// Called when MIDI data arrives.
 void tuh_midi_rx_cb(uint8_t dev_addr, uint32_t num_packets)
 {
-	if (MIDIHost::midi_dev_addr != dev_addr)
-		return;
+    if (GenericMidiCV::midi_dev_addr != dev_addr || num_packets == 0)
+        return;
 
-	if (num_packets == 0)
-		return;
-	
-	uint8_t cable_num;
-	uint8_t buffer[48];
-	while (1)
-	{
-		uint32_t bytes_read = tuh_midi_stream_read(dev_addr, &cable_num, buffer, sizeof(buffer));
+    uint8_t cable_num;
+    uint8_t buffer[48];
 
-		if (bytes_read == 0)
-			return;
-		
-		for (uint32_t idx = 0; idx < bytes_read; idx++)
-		{
-			//buffer[idx]
-		}
-	}
+    while (1)
+    {
+        uint32_t bytes_read =
+            tuh_midi_stream_read(dev_addr, &cable_num, buffer, sizeof(buffer));
 
+        if (bytes_read == 0)
+            return;
+
+        // MIDI Channel Voice messages are three bytes:
+        // status, data1, data2.
+        for (uint32_t idx = 0; idx + 2 < bytes_read; idx += 3)
+        {
+            uint8_t status = buffer[idx];
+            uint8_t data1  = buffer[idx + 1];
+            uint8_t data2  = buffer[idx + 2];
+
+            // Upper nibble 0xB = Control Change.
+            // This accepts CC messages on any MIDI channel.
+            if ((status & 0xF0) == 0xB0)
+            {
+                uint8_t cc = data1;
+                uint8_t value = data2 & 0x7F;
+
+                // CC20 -> output 1
+                // CC21 -> output 2
+                // CC22 -> output 3
+                // CC23 -> output 4
+                if (cc >= 20 && cc <= 23)
+                {
+                    GenericMidiCV::cc_value[cc - 20] = value;
+
+                    // About 1/20 second at 48 kHz.
+                    GenericMidiCV::midi_activity = 2400;
+                }
+            }
+        }
+    }
 }
+
 
 void tuh_midi_tx_cb(uint8_t dev_addr)
 {
@@ -193,14 +173,11 @@ void tuh_midi_tx_cb(uint8_t dev_addr)
 }
 
 
-
 int main()
 {
-	set_sys_clock_khz(144000, true);
+    set_sys_clock_khz(144000, true);
 
-	MIDIHost mh;
-	mh.StartUSBCore();
-	mh.Run();
+    GenericMidiCV card;
+    card.StartUSBCore();
+    card.Run();
 }
-
-  
