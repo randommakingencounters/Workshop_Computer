@@ -54,6 +54,10 @@ target_sources(midi_device_host PUBLIC
 add_example(hid_keyboard_mouse)
 target_link_libraries(hid_keyboard_mouse pico_multicore tinyusb_host tinyusb_board)
 
+add_example(generic_midi_cv)
+target_sources(generic_midi_cv PUBLIC ${CMAKE_CURRENT_LIST_DIR}/examples/generic_midi_cv/usb_midi_host.c ${CMAKE_CURRENT_LIST_DIR}/examples/generic_midi_cv/usb_midi_host_app_driver.c)
+target_link_libraries(generic_midi_cv pico_multicore tinyusb_host tinyusb_board)
+
 add_example(midi_host)
 target_sources(midi_host PUBLIC ${CMAKE_CURRENT_LIST_DIR}/examples/midi_host/usb_midi_host.c  ${CMAKE_CURRENT_LIST_DIR}/examples/midi_host/usb_midi_host_app_driver.c)
 target_link_libraries(midi_host pico_multicore tinyusb_host tinyusb_board  )
