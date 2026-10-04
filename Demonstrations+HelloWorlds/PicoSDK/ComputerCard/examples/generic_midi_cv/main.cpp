@@ -58,6 +58,18 @@ public:
         // Bottom-right LED: flashes whenever one of our four CCs is received.
         LedOn(5, midi_activity > 0);
 
+		// MIDI CC values 0-127 -> 0-5V
+
+		// Audio outputs:
+		// Measured full-scale +2047 = approximately +5.97V,
+		// so +1714 is approximately +5.00V.
+		AudioOut1((cc_value[0] * 1714) / 127);
+		AudioOut2((cc_value[1] * 1714) / 127);
+
+		// Dedicated CV outputs use calibrated millivolt conversion.
+		CVOut1Millivolts((cc_value[2] * 5000) / 127);
+		CVOut2Millivolts((cc_value[3] * 5000) / 127);
+
         if (midi_activity > 0)
             midi_activity--;
     }
